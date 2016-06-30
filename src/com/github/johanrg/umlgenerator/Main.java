@@ -6,7 +6,6 @@ import com.github.johanrg.parser.CommandLineParserException;
 import java.lang.reflect.*;
 import java.util.*;
 
-
 /**
  * @author Johan Gustafsson
  * @since 6/111222/2016.
@@ -15,17 +14,25 @@ public class Main {
     public static void main(String[] args) {
         if (args.length == 0) {
             System.out.println("Usage: ");
-            System.out.println("\t-depth  The level of inheritance to include 0..n");
-            System.out.println("\t-classes <class 1> <class 2> ... <class n>");
+            System.out.println("\t-d\t<level> Depth level of inheritance to include 0..n");
+            System.out.println("\t-v\t<level> Verbosity level 0: No method/field info, 1: 5 methods/fields, 2:All available info");
+            System.out.println("\t-c\t<class 1> <class 2> ... <class n>");
             System.exit(0);
         }
 
         CommandLineParser clp = new CommandLineParser(args);
         int classDepth = 0;
         List<String> classList = null;
+        int verbose = 0;
         try {
-            classDepth = clp.getInteger("-depth", 1);
-            classList = clp.getList("-classes", -1);
+            classDepth = clp.getInteger("-d", 1);
+            classList = clp.getList("-c", -1);
+            verbose = clp.getInteger("-v", 0);
+            if (verbose == 1) {
+                verbose = 5;
+            } else if (verbose == 2) {
+                verbose = 999;
+            }
         } catch (CommandLineParserException e) {
             System.out.println(e.getMessage());
             System.exit(1);
@@ -34,19 +41,20 @@ public class Main {
         final StringBuilder plantUmlScript = new StringBuilder();
         plantUmlScript.append("@startuml\n");
 
-        Set<Class<?>> classes = new LinkedHashSet<>();
+        Set<Class<?>> classSet = new LinkedHashSet<>();
         for (String className : classList) {
             try {
-                classes.add(Class.forName(className));
-                getSuperClasses(Class.forName(className), classDepth, classes);
-                getInterfaces(Class.forName(className), classDepth, classes);
+                classSet.add(Class.forName(className));
+                getSuperClasses(Class.forName(className), classDepth, classSet);
+                getInterfaces(Class.forName(className), classDepth, classSet);
             } catch (ClassNotFoundException e) {
                 System.out.printf("Can not find class %s\n", className);
                 System.exit(1);
             }
         }
+
         Set<String> relationWith = new LinkedHashSet<>();
-        for (Class<?> cls : classes) {
+        for (Class<?> cls : classSet) {
             if (cls.isInterface()) {
                 plantUmlScript.append("interface ");
                 plantUmlScript.append(cls.getName()).append(" {\n");
@@ -60,35 +68,45 @@ public class Main {
 
             if (classDepth > 0) {
                 Class superClass = cls.getSuperclass();
-                if (superClass != null && classes.contains(superClass)) {
+                if (superClass != null && classSet.contains(superClass)) {
                     if (!superClass.getName().equals("java.lang.Object") && !superClass.getName().equals("java.lang.Enum")) {
-                        relationWith.add(String.format("%s <|-- %s", superClass.getName(), cls.getName()));
+                        relationWith.add(String.format("%s --|> %s", cls.getName(), superClass.getName()));
                     }
                 }
 
                 for (Class<?> iface : cls.getInterfaces()) {
-                    relationWith.add(String.format("%s <|.. %s", iface.getName(), cls.getName()));
+                    relationWith.add(String.format("%s ..|> %s", cls.getName(), iface.getName()));
                 }
             }
 
-            for (Field field : cls.getDeclaredFields()) {
-                for (Class<?> c : classes) {
-                    if (c.getName().equals(field.getType().getName())) {
-                        relationWith.add(String.format("%s *-- %s", c.getName(), cls.getName()));
+            if (verbose > 0) {
+                int iterations = verbose;
+                for (Field field : cls.getDeclaredFields()) {
+                    for (Class<?> c : classSet) {
+                        if (c.getName().equals(field.getType().getName())) {
+                            relationWith.add(String.format("%s --* %s", cls.getName(), c.getName()));
+                        }
+                    }
+                    plantUmlScript.append("\t").append(modifiersToString(field.getModifiers()));
+                    plantUmlScript.append(field.getName()).append(" ").append(field.getType().getName().replace("[L", "")).append("\n");
+                    if (--iterations == 0) {
+                        break;
                     }
                 }
-                plantUmlScript.append("\t").append(modifiersToString(field.getModifiers()));
-                plantUmlScript.append(field.getName()).append(" ").append(field.getType().getName().replace("[L", "")).append("\n");
-            }
-            for (Method method : cls.getDeclaredMethods()) {
-                plantUmlScript.append("\t").append(modifiersToString(method.getModifiers()));
-                plantUmlScript.append(method.getName()).append("(");
-                List<String> types = new ArrayList<>();
-                for (Parameter param : method.getParameters()) {
+                iterations = verbose;
+                for (Method method : cls.getDeclaredMethods()) {
+                    plantUmlScript.append("\t").append(modifiersToString(method.getModifiers()));
+                    plantUmlScript.append(method.getName()).append("(");
+                    List<String> types = new ArrayList<>();
+                    for (Parameter param : method.getParameters()) {
 
-                    types.add(param.getType().getName().replace("[L", ""));
+                        types.add(param.getType().getName().replace("[L", ""));
+                    }
+                    plantUmlScript.append(String.join(", ", types)).append(")\n");
+                    if (--iterations == 0) {
+                        break;
+                    }
                 }
-                plantUmlScript.append(String.join(", ", types)).append(")\n");
             }
             plantUmlScript.append("}\n");
 
